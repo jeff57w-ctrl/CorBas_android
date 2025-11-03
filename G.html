@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CorBas - Complete Corpus Analysis Tool</title>
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#6366f1">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        .status-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .tag-chip { cursor: pointer; transition: all 0.2s; user-select: none; }
+        .tag-chip:hover { transform: scale(1.05); }
+        .tag-included { background: #22c55e; color: white; }
+        .tag-excluded { background: #ef4444; color: white; }
+        .tag-neutral { background: #e5e7eb; color: #374151; }
+        .search-phrase { display: inline-block; background: #dbeafe; padding: 2px 8px; margin: 2px; border-radius: 4px; font-size: 14px; }
+        .graph-card { transition: all 0.3s; }
+        .graph-card:hover { transform: translateY(-4px); box-shadow: 0 20px 40px rgba(0,0,0,0.15); }
+        .graph-selector { cursor: pointer; transition: all 0.3s; }
+        .graph-selector:hover { transform: scale(1.05); }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.6s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 min-h-screen">
+    <div id="app"></div>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        const BACKEND_URL = window.location.origin;
+        
+        const POS_TAGS = {'ADJ':'adjective','ADP':'adposition','ADV':'adverb','AUX':'auxiliary','CCONJ':'coordinating conjunction','DET':'determiner','INTJ':'interjection','NOUN':'noun','NUM':'numeral','PART':'particle','PRON':'pronoun','PROPN':'proper noun','PUNCT':'punctuation','SCONJ':'subordinating conjunction','SYM':'symbol','VERB':'verb','X':'other','SPACE':'space','.':'punctuation mark',',':'comma','-LRB-':'left bracket','-RRB-':'right bracket','``':'opening quote','""':'closing quote',"'":'closing quote',':':'colon','$':'currency','#':'number sign','AFX':'affix','CC':'coordinating conjunction','CD':'cardinal number','DT':'determiner','EX':'existential there','FW':'foreign word','HYPH':'hyphen','IN':'preposition','JJ':'adjective','JJR':'adjective, comparative','JJS':'adjective, superlative','LS':'list marker','MD':'modal verb','NIL':'missing tag','NN':'noun, singular','NNP':'proper noun, singular','NNPS':'proper noun, plural','NNS':'noun, plural','PDT':'predeterminer','POS':'possessive ending','PRP':'personal pronoun','PRP$':'possessive pronoun','RB':'adverb','RBR':'adverb, comparative','RBS':'adverb, superlative','RP':'particle','TO':'infinitival to','UH':'interjection','VB':'verb, base form','VBD':'verb, past tense','VBG':'verb, gerund','VBN':'verb, past participle','VBP':'verb, non-3rd singular','VBZ':'verb, 3rd singular','WDT':'wh-determiner','WP':'wh-pronoun','WP$':'possessive wh-pronoun','WRB':'wh-adverb','SP':'space','ADD':'email','NFP':'superfluous punctuation','GW':'additional word','XX':'unknown'};
+        
+        const DEP_TAGS = {'ROOT':'root','acl':'clausal modifier','acomp':'adjectival complement','advcl':'adverbial clause','advmod':'adverbial modifier','agent':'agent','amod':'adjectival modifier','appos':'appositional modifier','attr':'attribute','aux':'auxiliary','auxpass':'passive auxiliary','case':'case marking','cc':'coordinating conjunction','ccomp':'clausal complement','clf':'classifier','compound':'compound','conj':'conjunct','cop':'copula','csubj':'clausal subject','csubjpass':'passive clausal subject','dative':'dative','dep':'unclassified','det':'determiner','discourse':'discourse element','dislocated':'dislocated','dobj':'direct object','expl':'expletive','fixed':'fixed expression','flat':'flat expression','goeswith':'goes with','hmod':'hyphenation modifier','hyph':'hyphen','infmod':'infinitival modifier','intj':'interjection','iobj':'indirect object','list':'list','mark':'marker','meta':'meta modifier','neg':'negation','nmod':'nominal modifier','nn':'noun compound','npadvmod':'noun phrase adverbial','nsubj':'nominal subject','nsubjpass':'passive nominal subject','nummod':'numeric modifier','oprd':'object predicate','obj':'object','obl':'oblique nominal','orphan':'orphan','parataxis':'parataxis','pcomp':'prepositional complement','pobj':'object of preposition','poss':'possession modifier','possessive':'possessive modifier','preconj':'pre-conjunction','prep':'prepositional modifier','prt':'particle','punct':'punctuation','quantmod':'quantifier modifier','rcmod':'relative clause','relcl':'relative clause','reparandum':'disfluency','vocative':'vocative','xcomp':'open clausal complement'};
+        
+        const SEMANTIC_TAGS = {'A1':'General/abstract','A5.1+':'Good','A5.1-':'Bad','E1':'Emotions','E1.1+':'Happy','E1.1-':'Sad','M1':'Moving','M7':'Places','N1':'Numbers','O2':'Objects','Q2.2':'Speech','S1.2':'Personality','T1':'Time','X2.1':'Thought','Z3':'Names','Z5':'Grammar','Z8':'Pronouns','Z99':'Unmatched'};
+        
+        let state = {
+            corpora:[],activeTab:'input',backendStatus:'checking',processing:false,
+            processingStatus:'',textInput:'',corpusName:'',contextSize:5,selectedCorpora:[],
+            tagStates:{},activeTagType:'pos',showTagDropdown:false,highlightColor:'#FFFF00',
+            consecutiveMode:false,selectedTagsOrder:[],selectedTagsTypes:{},pdfFile:null,
+            searchPhrases:[],searchInput:'',activeGraphType:'frequency',
+            selectedFreqGraph:'bar',topWordsLimit:20,showAllWords:false,
+            corpusBuilder: {
+                platform: 'twitter',
+                username: '',
+                authToken: '',
+                ct0: '',
+                maxTweets: null,
+                building: false,
+                result: null,
+                showInstructions: false
+            }
+        };
+
+        let chartInstances = {};
+
+        function checkFileSize(file){const maxSize=50*1024*1024;if(file.size>maxSize){alert(`⚠️ File too large!\n\nFile: ${(file.size/1024/1024).toFixed(1)} MB\nMaximum: 50 MB`);return false;}if(file.size>10*1024*1024){return confirm(`⚠️ Large file: ${(file.size/1024/1024).toFixed(1)} MB\nEst. time: 2-5 min\n\nContinue?`);}return true;}
+
+        async function checkBackendHealth(){try{const r=await fetch(`${BACKEND_URL}/health`);state.backendStatus=r.ok?'connected':'error';}catch(e){state.backendStatus='disconnected';}render();}
+
+        async function processText(text,name){if(text.length>500000)throw new Error(`Text too long: ${text.length} chars. Max: 500,000`);const r=await fetch(`${BACKEND_URL}/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,corpus_name:name})});if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`Error: ${r.status}`);}return(await r.json()).tokens;}
+
+        async function extractPDFText(file){state.processingStatus='Loading PDF...';render();const ab=await file.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:ab}).promise;state.processingStatus=`Extracting ${pdf.numPages} pages...`;render();const pd=[];for(let i=1;i<=pdf.numPages;i++){const p=await pdf.getPage(i);const c=await p.getTextContent();pd.push({pageNum:i,text:c.items.map(x=>x.str).join(' ')});}return{text:pd.map(p=>p.text).join('\n\n'),pages:pdf.numPages,pageData:pd};}
+
+        async function handleFileUpload(e){const fs=e.target.files;if(!fs.length)return;if(state.backendStatus!=='connected'){alert('Backend not connected!');return;}for(const f of fs){if(!checkFileSize(f)){e.target.value='';return;}}state.processing=true;render();for(const f of fs){try{let text='',pages=1,pageData=null;if(f.type==='application/pdf'){const pi=await extractPDFText(f);text=pi.text;pages=pi.pages;pageData=pi.pageData;if(!state.pdfFile)state.pdfFile=f;}else{text=await f.text();}if(!text.trim()){alert(`No text in ${f.name}`);continue;}state.processingStatus=`Analyzing ${f.name}...`;render();const tagged=await processText(text,f.name);state.corpora.push({id:Date.now()+Math.random(),name:f.name,text,tagged,type:f.type==='application/pdf'?'pdf':'text',pages,pageData,selected:true});}catch(err){alert(`Error: ${err.message}`);}}state.processing=false;state.processingStatus='';e.target.value='';render();}
+
+        async function analyzeText(){if(!state.textInput.trim()){alert('Enter text first');return;}if(state.backendStatus!=='connected'){alert('Backend not connected!');return;}state.processing=true;render();try{const name=state.corpusName.trim()||`Text_${Date.now()}`;state.processingStatus='Analyzing...';render();const tagged=await processText(state.textInput,name);state.corpora.push({id:Date.now(),name,text:state.textInput,tagged,type:'text',pages:1,selected:true});state.textInput='';state.corpusName='';state.activeTab='pos';alert(`Success! ${tagged.length} tokens`);}catch(err){alert(`Error: ${err.message}`);}state.processing=false;state.processingStatus='';render();}
+
+        function toggleCorpusSelection(id){const c=state.corpora.find(x=>x.id===id);if(c){c.selected=!c.selected;render();}}
+
+        function handleSearchInput(e){const v=e.target.value;state.searchInput=v;if(v.endsWith('  ')){const p=v.trim();if(p&&!state.searchPhrases.includes(p)){state.searchPhrases.push(p);state.searchInput='';render();}}}
+
+        function removeSearchPhrase(p){state.searchPhrases=state.searchPhrases.filter(x=>x!==p);render();}
+
+        function clearSearchPhrases(){state.searchPhrases=[];state.searchInput='';render();}
+
+        function toggleTag(tag){const cur=state.tagStates[tag]||'neutral';if(cur==='neutral'){state.tagStates[tag]='included';if(!state.selectedTagsOrder.includes(tag)){if(state.selectedTagsOrder.length<3){state.selectedTagsOrder.push(tag);state.selectedTagsTypes[tag]=state.activeTagType;}else{alert('Max 3 tags!');state.tagStates[tag]='neutral';return;}}}else if(cur==='included'){state.tagStates[tag]='excluded';state.selectedTagsOrder=state.selectedTagsOrder.filter(t=>t!==tag);delete state.selectedTagsTypes[tag];}else{state.tagStates[tag]='neutral';}const dd=document.querySelector('.tag-dropdown-scroll');const sp=dd?dd.scrollTop:0;render();setTimeout(()=>{const nd=document.querySelector('.tag-dropdown-scroll');if(nd)nd.scrollTop=sp;},0);}
+
+        function clearAllTags(){state.tagStates={};state.selectedTagsOrder=[];state.selectedTagsTypes={};render();}
+
+        function getFilteredResults(tagType){const results=[];const sc=state.corpora.filter(c=>c.selected);const inc=state.selectedTagsOrder.filter(t=>state.tagStates[t]==='included');const exc=Object.keys(state.tagStates).filter(t=>state.tagStates[t]==='excluded');sc.forEach(corpus=>{if(!corpus.tagged)return;if(state.consecutiveMode&&inc.length>1){for(let idx=0;idx<corpus.tagged.length-(inc.length-1);idx++){let m=true;let nw=[];for(let i=0;i<inc.length;i++){const tok=corpus.tagged[idx+i];const et=inc[i];const tc=state.selectedTagsTypes[et];let match=false;if(tc==='pos'){match=(tok.tag&&tok.tag.toUpperCase()===et.toUpperCase())||(tok.pos&&tok.pos.toUpperCase()===et.toUpperCase());}else if(tc==='dep'){match=tok.dep&&tok.dep.toUpperCase()===et.toUpperCase();}else if(tc==='semantic'){match=tok.semantic&&tok.semantic.toUpperCase()===et.toUpperCase();}if(!match){m=false;break;}nw.push(tok.word);}if(m&&state.searchPhrases.length>0){m=state.searchPhrases.some(p=>nw.join(' ').toLowerCase().includes(p.toLowerCase()));}if(m){const l=corpus.tagged.slice(Math.max(0,idx-state.contextSize),idx).map(t=>t.word).join(' ');const r=corpus.tagged.slice(idx+inc.length,Math.min(corpus.tagged.length,idx+inc.length+state.contextSize)).map(t=>t.word).join(' ');results.push({corpusName:corpus.name,corpusId:corpus.id,left:l,node:nw.join(' '),right:r,pos:corpus.tagged.slice(idx,idx+inc.length).map(t=>t.pos).join(' + '),tag:corpus.tagged.slice(idx,idx+inc.length).map(t=>t.tag).join(' + '),semantic:corpus.tagged.slice(idx,idx+inc.length).map(t=>t.semantic).join(' + '),dep:corpus.tagged.slice(idx,idx+inc.length).map(t=>t.dep).join(' + ')});}}}else{corpus.tagged.forEach((tok,idx)=>{let m=false;if(inc.length>0){m=inc.some(tag=>{const tc=state.selectedTagsTypes[tag]||tagType;if(tc==='pos'){return(tok.tag&&tok.tag.toUpperCase()===tag.toUpperCase())||(tok.pos&&tok.pos.toUpperCase()===tag.toUpperCase());}else if(tc==='dep'){return tok.dep&&tok.dep.toUpperCase()===tag.toUpperCase();}else{return tok.semantic&&tok.semantic.toUpperCase()===tag.toUpperCase();}});}else if(state.searchPhrases.length>0){m=true;}if(m&&exc.length>0){m=!exc.some(tag=>(tok.pos&&tok.pos.toUpperCase()===tag.toUpperCase())||(tok.tag&&tok.tag.toUpperCase()===tag.toUpperCase())||(tok.dep&&tok.dep.toUpperCase()===tag.toUpperCase())||(tok.semantic&&tok.semantic.toUpperCase()===tag.toUpperCase()));}if(m&&state.searchPhrases.length>0){m=state.searchPhrases.some(p=>tok.word.toLowerCase().includes(p.toLowerCase()));}if(m){const l=corpus.tagged.slice(Math.max(0,idx-state.contextSize),idx).map(t=>t.word).join(' ');const r=corpus.tagged.slice(idx+1,Math.min(corpus.tagged.length,idx+state.contextSize+1)).map(t=>t.word).join(' ');results.push({corpusName:corpus.name,corpusId:corpus.id,left:l,node:tok.word,right:r,pos:tok.pos,tag:tok.tag,semantic:tok.semantic,dep:tok.dep});}});}});return results;}
+
+        function getNodeFrequency(r){const f={};r.forEach(x=>{const w=x.node.toLowerCase();f[w]=(f[w]||0)+1;});return Object.entries(f).sort((a,b)=>b[1]-a[1]);}
+
+        async function highlightPDF(){if(!state.pdfFile){alert('Upload PDF first!');return;}const r=getFilteredResults(state.activeTagType);const w=[...new Set(r.map(x=>x.node.toLowerCase()))];if(w.length===0){alert('No words! Apply filters.');return;}state.processing=true;state.processingStatus='Highlighting...';render();try{const fd=new FormData();fd.append('file',state.pdfFile);fd.append('phrases',JSON.stringify(w));fd.append('color',state.highlightColor);const res=await fetch(`${BACKEND_URL}/highlight_pdf`,{method:'POST',body:fd});if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e.error||`Error: ${res.status}`);}const b=await res.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=state.pdfFile.name.replace('.pdf','')+'_highlighted.pdf';a.click();URL.revokeObjectURL(u);alert(`✅ Success!\n${r.length} occurrences\n${w.length} unique phrases`);}catch(e){alert(`Error: ${e.message}`);}state.processing=false;state.processingStatus='';render();}
+
+        function exportToCSV(data,filename){if(!data||!data.length)return;const h=Object.keys(data[0]);const csv=[h.join(','),...data.map(row=>h.map(k=>`"${(row[k]||'').toString().replace(/"/g,'""')}"`).join(','))].join('\n');const b=new Blob([csv],{type:'text/csv'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`${filename}.csv`;a.click();URL.revokeObjectURL(u);}
+
+        function downloadCanvas(canvasId, filename) {
+            const canvas = document.getElementById(canvasId);
+            if (canvas) {
+                const url = canvas.toDataURL('image/png');
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+            }
+        }
+
+        function downloadSVG(svgId, filename) {
+            const svg = document.getElementById(svgId);
+            if (svg) {
+                const serializer = new XMLSerializer();
+                const svgStr = serializer.serializeToString(svg);
+                const blob = new Blob([svgStr], {type: 'image/svg+xml'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        function createBarChart(frequency) {
+            setTimeout(() => {
+                const canvas = document.getElementById('frequencyChart');
+                if (!canvas) return;
+                
+                if (chartInstances['freq']) {
+                    chartInstances['freq'].destroy();
+                }
+
+                const ctx = canvas.getContext('2d');
+                const limit = state.showAllWords ? frequency.length : state.topWordsLimit;
+                const data = frequency.slice(0, limit);
+                
+                const colors = [
+                    '#FF6B9D', '#C44569', '#FFA07A', '#FF8C94', '#E74C3C',
+                    '#9B59B6', '#8E44AD', '#3498DB', '#2980B9', '#1ABC9C',
+                    '#16A085', '#27AE60', '#229954', '#F39C12', '#E67E22',
+                    '#D35400', '#34495E', '#2C3E50', '#95A5A6', '#7F8C8D'
+                ];
+                
+                chartInstances['freq'] = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.map(([word]) => word),
+                        datasets: [{
+                            label: 'Frequency',
+                            data: data.map(([_, count]) => count),
+                            backgroundColor: data.map((_, i) => colors[i % colors.length]),
+                            borderColor: data.map((_, i) => colors[i % colors.length]),
+                            borderWidth: 2,
+                            borderRadius: 8
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: `Word Frequency Analysis (Top ${limit})`,
+                                font: { size: 18, weight: 'bold' },
+                                color: '#1F2937'
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { 
+                                    stepSize: 1,
+                                    font: { size: 12, weight: 'bold' }
+                                },
+                                grid: { color: 'rgba(0,0,0,0.05)' }
+                            },
+                            x: {
+                                ticks: { 
+                                    font: { size: 11, weight: 'bold' },
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                },
+                                grid: { display: false }
+                            }
+                        }
+                    }
+                });
+            }, 100);
+        }
+
+        function createPieChart(frequency) {
+            setTimeout(() => {
+                const canvas = document.getElementById('frequencyChart');
+                if (!canvas) return;
+                
+                if (chartInstances['freq']) {
+                    chartInstances['freq'].destroy();
+                }
+
+                const ctx = canvas.getContext('2d');
+                const limit = state.showAllWords ? frequency.length : state.topWordsLimit;
+                const data = frequency.slice(0, limit);
+                
+                const vibrantColors = [
+                    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+                    '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384',
+                    '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40',
+                    '#E74C3C', '#3498DB', '#F39C12', '#1ABC9C', '#9B59B6'
+                ];
+                
+                chartInstances['freq'] = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: data.map(([word]) => word),
+                        datasets: [{
+                            data: data.map(([_, count]) => count),
+                            backgroundColor: vibrantColors,
+                            borderColor: '#fff',
+                            borderWidth: 3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels: {
+                                    font: { size: 12, weight: 'bold' },
+                                    padding: 15,
+                                    generateLabels: (chart) => {
+                                        const data = chart.data;
+                                        return data.labels.map((label, i) => ({
+                                            text: `${label}: ${data.datasets[0].data[i]}`,
+                                            fillStyle: data.datasets[0].backgroundColor[i],
+                                            hidden: false,
+                                            index: i
+                                        }));
+                                    }
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: `Word Distribution (Top ${limit})`,
+                                font: { size: 18, weight: 'bold' },
+                                color: '#1F2937'
+                            }
+                        }
+                    }
+                });
+            }, 100);
+        }
+
+        function createDoughnutChart(frequency) {
+            setTimeout(() => {
+                const canvas = document.getElementById('frequencyChart');
+                if (!canvas) return;
+                
+                if (chartInstances['freq']) {
+                    chartInstances['freq'].destroy();
+                }
+
+                const ctx = canvas.getContext('2d');
+                const limit = state.showAllWords ? frequency.length : state.topWordsLimit;
+                const data = frequency.slice(0, limit); 
+
+const gradientColors = [
+                    '#667eea', '#764ba2', '#f093fb', '#4facfe', '#00f2fe',
+                    '#43e97b', '#38f9d7', '#fa709a', '#fee140', '#30cfd0',
+                    '#a8edea', '#fed6e3', '#ffecd2', '#fcb69f', '#ff9a9e',
+                    '#fecfef', '#f8b500', '#00d2ff', '#3a7bd5', '#00d2ff'
+                ];
+                
+                chartInstances['freq'] = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.map(([word]) => word),
+                        datasets: [{
+                            data: data.map(([_, count]) => count),
+                            backgroundColor: gradientColors,
+                            borderColor: '#fff',
+                            borderWidth: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels: {
+                                    font: { size: 12, weight: 'bold' },
+                                    padding: 15,
+                                    generateLabels: (chart) => {
+                                        const data = chart.data;
+                                        const total = data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                        return data.labels.map((label, i) => {
+                                            const value = data.datasets[0].data[i];
+                                            const percent = ((value / total) * 100).toFixed(1);
+                                            return {
+                                                text: `${label}: ${value} (${percent}%)`,
+                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                hidden: false,
+                                                index: i
+                                            };
+                                        });
+                                    }
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: `Word Percentage Distribution (Top ${limit})`,
+                                font: { size: 18, weight: 'bold' },
+                                color: '#1F2937'
+                            }
+                        },
+                        cutout: '50%'
+                    }
+                });
+            }, 100);
+        }
+
+        function createLineChart(frequency) {
+            setTimeout(() => {
+                const canvas = document.getElementById('frequencyChart');
+                if (!canvas) return;
+                
+                if (chartInstances['freq']) {
+                    chartInstances['freq'].destroy();
+                }
+
+                const ctx = canvas.getContext('2d');
+                const limit = state.showAllWords ? frequency.length : state.topWordsLimit;
+                const data = frequency.slice(0, limit);
+                
+                chartInstances['freq'] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.map(([word]) => word),
+                        datasets: [{
+                            label: 'Frequency Trend',
+                            data: data.map(([_, count]) => count),
+                            borderColor: '#8B5CF6',
+                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            pointBackgroundColor: '#8B5CF6',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: `Frequency Distribution Curve (Top ${limit})`,
+                                font: { size: 18, weight: 'bold' },
+                                color: '#1F2937'
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { 
+                                    stepSize: 1,
+                                    font: { size: 12, weight: 'bold' }
+                                },
+                                grid: { color: 'rgba(139, 92, 246, 0.1)' }
+                            },
+                            x: {
+                                ticks: { 
+                                    font: { size: 11, weight: 'bold' },
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                },
+                                grid: { display: false }
+                            }
+                        }
+                    }
+                });
+            }, 100);
+        }
+
+        function createPolarAreaChart(frequency) {
+            setTimeout(() => {
+                const canvas = document.getElementById('frequencyChart');
+                if (!canvas) return;
+                
+                if (chartInstances['freq']) {
+                    chartInstances['freq'].destroy();
+                }
+
+                const ctx = canvas.getContext('2d');
+                const limit = state.showAllWords ? frequency.length : state.topWordsLimit;
+                const data = frequency.slice(0, limit);
+                
+                const radialColors = [
+                    'rgba(255, 99, 132, 0.7)', 'rgba(54, 162, 235, 0.7)', 
+                    'rgba(255, 206, 86, 0.7)', 'rgba(75, 192, 192, 0.7)',
+                    'rgba(153, 102, 255, 0.7)', 'rgba(255, 159, 64, 0.7)',
+                    'rgba(199, 199, 199, 0.7)', 'rgba(83, 102, 255, 0.7)',
+                    'rgba(255, 99, 255, 0.7)', 'rgba(99, 255, 132, 0.7)',
+                    'rgba(255, 206, 132, 0.7)', 'rgba(132, 206, 255, 0.7)',
+                    'rgba(206, 132, 255, 0.7)', 'rgba(132, 255, 206, 0.7)',
+                    'rgba(255, 132, 206, 0.7)', 'rgba(206, 255, 132, 0.7)',
+                    'rgba(132, 132, 255, 0.7)', 'rgba(255, 132, 132, 0.7)',
+                    'rgba(132, 255, 255, 0.7)', 'rgba(255, 255, 132, 0.7)'
+                ];
+                
+                chartInstances['freq'] = new Chart(ctx, {
+                    type: 'polarArea',
+                    data: {
+                        labels: data.map(([word]) => word),
+                        datasets: [{
+                            data: data.map(([_, count]) => count),
+                            backgroundColor: radialColors,
+                            borderColor: '#fff',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels: {
+                                    font: { size: 11, weight: 'bold' },
+                                    padding: 12
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: `Polar Area Frequency Chart (Top ${limit})`,
+                                font: { size: 18, weight: 'bold' },
+                                color: '#1F2937'
+                            }
+                        },
+                        scales: {
+                            r: {
+                                beginAtZero: true,
+                                ticks: {
+                                    stepSize: 1,
+                                    font: { size: 10, weight: 'bold' }
+                                }
+                            }
+                        }
+                    }
+                });
+            }, 100);
+        }
+
+        // Corpus Builder Functions
+        async function buildTwitterCorpus() {
+            if (!state.corpusBuilder.username || !state.corpusBuilder.authToken || !state.corpusBuilder.ct0) {
+                alert('Please fill in all required fields');
+                return;
+            }
+            
+            state.corpusBuilder.building = true;
+            state.corpusBuilder.result = null;
+            render();
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/corpus/twitter/build`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: state.corpusBuilder.username,
+                        auth_token: state.corpusBuilder.authToken,
+                        ct0: state.corpusBuilder.ct0,
+                        max_tweets: state.corpusBuilder.maxTweets
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    state.corpusBuilder.result = data;
+                    alert(`✅ Success! Collected ${data.stats.total_tweets.toLocaleString()} tweets!`);
+                } else {
+                    alert(`❌ Error: ${data.error}`);
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+            
+            state.corpusBuilder.building = false;
+            render();
+        }
+
+        async function downloadCorpus(format) {
+            state.processing = true;
+            state.processingStatus = `Preparing ${format.toUpperCase()} download...`;
+            render();
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/corpus/twitter/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: state.corpusBuilder.username,
+                        auth_token: state.corpusBuilder.authToken,
+                        ct0: state.corpusBuilder.ct0,
+                        format: format,
+                        max_tweets: state.corpusBuilder.maxTweets
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Download failed');
+                }
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${state.corpusBuilder.username}_corpus_${new Date().getTime()}.${format}`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                alert(`✅ ${format.toUpperCase()} downloaded successfully!`);
+            } catch (error) {
+                alert(`❌ Download error: ${error.message}`);
+            }
+            
+            state.processing = false;
+            state.processingStatus = '';
+            render();
+        }
+
+        function render(){const app=document.getElementById('app');const res=getFilteredResults(state.activeTagType);const freq=getNodeFrequency(res);app.innerHTML=`<div class="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white p-6 shadow-xl"><div class="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-4"><div><h1 class="text-3xl font-bold mb-2">⚡ CorBas</h1><p class="text-indigo-100 text-sm">University of Basra • Linguistics</p></div><div class="text-right"><div class="inline-flex items-center gap-2 px-4 py-2 rounded-lg ${state.backendStatus==='connected'?'bg-green-500':state.backendStatus==='checking'?'bg-yellow-500':'bg-red-500'}"><div class="w-2 h-2 rounded-full bg-white ${state.backendStatus==='connected'?'status-dot':''}"></div><span class="text-sm font-semibold">${state.backendStatus==='connected'?'Connected (Secured)':'Offline'}</span></div></div></div></div>${state.processing?`<div class="bg-yellow-100 border-b-2 border-yellow-300 p-3 text-center"><span class="text-yellow-900 font-semibold">⏳ ${state.processingStatus||'Processing...'}</span></div>`:''}<div class="bg-white shadow-md overflow-x-auto"><div class="max-w-7xl mx-auto flex">${renderTab('input','📝 Input')}${renderTab('pos','🏷️ POS')}${renderTab('dep','🔗 Dependencies')}${renderTab('semantic','🔢 Semantic')}${renderTab('graphs','📊 Graphs')}${renderTab('corpus-builder','🏗️ Corpus Builder')}</div></div><div class="max-w-7xl mx-auto p-4">${state.activeTab==='input'?renderInputTab():state.activeTab==='pos'?renderSearchTab('pos',res,freq):state.activeTab==='dep'?renderSearchTab('dep',res,freq):state.activeTab==='semantic'?renderSearchTab('semantic',res,freq):state.activeTab==='graphs'?renderGraphsTab(res, freq):state.activeTab==='corpus-builder'?renderCorpusBuilderTab():''}</div><div class="text-center py-6 text-gray-600 text-sm border-t"><p class="font-semibold">CorBas v4.0 - Secured Edition 🔒</p><p class="text-xs mt-1">Limits: 50MB • 500K chars • 10 req/min</p></div>`;
+        
+        if (state.activeTab === 'graphs' && res.length > 0) {
+            if (state.activeGraphType === 'frequency') {
+                if (state.selectedFreqGraph === 'bar') createBarChart(freq);
+                else if (state.selectedFreqGraph === 'pie') createPieChart(freq);
+                else if (state.selectedFreqGraph === 'doughnut') createDoughnutChart(freq);
+                else if (state.selectedFreqGraph === 'line') createLineChart(freq);
+                else if (state.selectedFreqGraph === 'polar') createPolarAreaChart(freq);
+            }
+        }
+        }
+
+        function renderTab(id,label){return`<button onclick="state.activeTab='${id}';render();" class="px-6 py-4 font-medium transition-all whitespace-nowrap ${state.activeTab===id?'bg-indigo-600 text-white border-b-4 border-indigo-700':'text-gray-600 hover:bg-gray-50'}">${label}</button>`;}
+
+        function renderInputTab(){return`<div class="space-y-4"><div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-4"><h3 class="font-bold text-blue-900 mb-2">📋 Usage Limits (Free Tier)</h3><ul class="text-sm text-blue-700 space-y-1"><li>✅ Max file: <strong>50 MB</strong></li><li>✅ Max text: <strong>500K chars (~100 pages)</strong></li><li>✅ Rate: <strong>10 analyses/min</strong></li><li>⚠️ Optimal PDF: <strong>50-100 pages</strong></li><li>⚠️ Large files (200+ pages): 2-5 min</li></ul></div><div class="bg-white rounded-2xl shadow-xl p-6"><h2 class="text-2xl font-bold mb-4">📝 Enter Text</h2><div class="space-y-4"><input type="text" value="${state.corpusName}" oninput="state.corpusName=this.value" placeholder="Corpus name (optional)" class="w-full p-3 border-2 rounded-xl" ${state.processing?'disabled':''}><textarea oninput="state.textInput=this.value" placeholder="Paste text here..." class="w-full h-40 p-4 border-2 rounded-xl resize-none" ${state.processing?'disabled':''}>${state.textInput}</textarea><button onclick="analyzeText()" ${state.processing||!state.textInput.trim()?'disabled':''} class="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 disabled:opacity-50">⚡ Analyze Text</button></div></div><div class="bg-white rounded-2xl shadow-xl p-6"><h2 class="text-2xl font-bold mb-4">📄 Upload Files</h2><label class="block"><input type="file" multiple accept=".txt,.pdf" onchange="handleFileUpload(event)" class="block w-full text-sm text-gray-500 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:border-0 file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700" ${state.processing?'disabled':''}></label><p class="text-xs text-gray-500 mt-2">⚠️ Max: 50MB • .txt, .pdf</p></div>${state.corpora.length>0?`<div class="bg-white rounded-2xl shadow-xl p-6"><h2 class="text-2xl font-bold mb-4">📚 Your Corpora (${state.corpora.length})</h2><p class="text-sm text-gray-600 mb-3">Click to select/deselect:</p><div class="space-y-2">${state.corpora.map(c=>`<div onclick="toggleCorpusSelection(${c.id})" class="p-4 rounded-xl border-2 cursor-pointer transition-all ${c.selected?'bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-400':'bg-gray-50 border-gray-200 opacity-50'}"><div class="flex items-center gap-3"><div class="flex-shrink-0"><div class="w-6 h-6 rounded border-2 flex items-center justify-center ${c.selected?'bg-indigo-600 border-indigo-600':'border-gray-300'}">${c.selected?'<span class="text-white text-sm">✓</span>':''}</div></div><div class="flex-1"><p class="font-semibold text-gray-800">${c.name}</p><p class="text-sm text-gray-600">${c.tagged.length} tokens • ${c.type}</p></div></div></div>`).join('')}</div></div>`:''}</div>`;}
+
+        function renderSearchTab(tagType,results,frequency){const tagMap=tagType==='pos'?POS_TAGS:tagType==='dep'?DEP_TAGS:SEMANTIC_TAGS;const title=tagType==='pos'?'POS Tag Search':tagType==='dep'?'Dependency Search':'Semantic Search';const icon=tagType==='pos'?'🏷️':tagType==='dep'?'🔗':'🔢';return`<div class="bg-white rounded-2xl shadow-xl p-6"><h2 class="text-2xl font-bold mb-4">${icon} ${title}</h2>${state.corpora.filter(c=>c.selected).length===0?`<div class="p-4 bg-yellow-50 border-2 border-yellow-200 rounded-xl mb-4"><p class="text-yellow-800 font-semibold">⚠️ No corpora selected!</p><p class="text-sm text-yellow-700 mt-1">Go to Input tab</p></div>`:''}<div class="space-y-4 mb-6"><div class="p-4 bg-gradient-to-r from-cyan-50 to-blue-50 rounded-xl border-2 border-cyan-200"><div class="flex items-center justify-between mb-3"><h3 class="font-bold text-cyan-900">🔍 Word/Phrase Search</h3>${state.searchPhrases.length>0?`<button onclick="clearSearchPhrases()" class="text-sm bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">Clear</button>`:''}</div><input type="text" id="searchInput" value="${state.searchInput}" onkeyup="handleSearchInput(event)" placeholder="Type word/phrase and press SPACE SPACE" class="w-full p-3 border-2 border-cyan-300 rounded-lg">${state.searchPhrases.length>0?`<div class="mt-3 p-3 bg-white rounded-lg"><p class="text-sm font-semibold text-gray-700 mb-2">Searching:</p><div class="flex flex-wrap gap-2">${state.searchPhrases.map((p,i)=>`<div class="search-phrase flex items-center gap-2"><span>${p}</span>${i<state.searchPhrases.length-1?'<span class="text-cyan-600">|</span>':''}<button onclick="removeSearchPhrase('${p.replace(/'/g,"\\'")}')" class="text-red-600 font-bold">×</button></div>`).join('')}</div></div>`:'<p class="text-sm text-cyan-700 mt-2">💡 Double-space to add</p>'}</div><div class="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border-2 border-indigo-200"><div class="flex items-center justify-between mb-3"><h3 class="font-bold text-indigo-900">🏷️ Tag Selection (Cross-Category!)</h3><button onclick="clearAllTags()" class="text-sm bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">Clear</button></div>${state.selectedTagsOrder.length>0?`<div class="mb-3 p-3 bg-white rounded"><p class="text-sm font-semibold text-gray-700 mb-2">Selected (works across tabs):</p><div class="flex flex-wrap gap-2">${state.selectedTagsOrder.map((tag,i)=>{const tc=state.selectedTagsTypes[tag];const col=tc==='pos'?'bg-green-500':tc==='dep'?'bg-blue-500':'bg-purple-500';const lab=tc==='pos'?'POS':tc==='dep'?'DEP':'SEM';return`<span class="${col} text-white px-3 py-1 rounded-lg font-bold text-sm">${i+1}. ${tag} <span class="text-xs opacity-75">(${lab})</span></span>`;}).join('')}</div><p class="text-xs text-gray-500 mt-1">Switch tabs to select from different categories!</p></div>`:''}<div><button onclick="state.consecutiveMode=!state.consecutiveMode;render();" class="w-full px-4 py-2 rounded-lg font-semibold ${state.consecutiveMode?'bg-purple-600 text-white':'bg-gray-200 text-gray-700'}">${state.consecutiveMode?'✓ Consecutive ON':'Consecutive OFF'}</button><p class="text-xs text-gray-500 mt-1">Find in sequence (e.g., advmod → JJ → NOUN)</p></div></div><div><button onclick="state.showTagDropdown=!state.showTagDropdown;state.activeTagType='${tagType}';render();" class="w-full flex items-center justify-between p-3 border-2 rounded-xl hover:border-indigo-500"><span class="font-semibold">Filter by Tags</span><span>${state.showTagDropdown?'▲':'▼'}</span></button>${state.showTagDropdown&&state.activeTagType===tagType?`<div class="mt-2 p-4 border-2 rounded-xl bg-gray-50 max-h-96 overflow-y-auto tag-dropdown-scroll"><p class="text-sm text-gray-600 mb-3 sticky top-0 bg-gray-50 pb-2"><span class="font-semibold">Click once</span> to include (green), <span class="font-semibold">twice</span> to exclude (red), <span class="font-semibold">thrice</span> to reset</p><div class="flex flex-wrap gap-2">${Object.entries(tagMap).map(([tag,desc])=>{const ts=state.tagStates[tag]||'neutral';return`<div onclick="event.stopPropagation();toggleTag('${tag}')" class="tag-chip tag-${ts} px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><span class="font-bold">${tag}</span><span class="text-xs opacity-90">${desc}</span></div>`;}).join('')}</div></div>`:''}</div><div class="flex items-center gap-4"><label class="text-sm font-semibold">Context: ${state.contextSize}</label><input type="range" min="2" max="15" value="${state.contextSize}" oninput="state.contextSize=parseInt(this.value);render();" class="flex-1"></div>${state.pdfFile?`<div class="flex items-center gap-3 p-4 bg-green-50 border-2 border-green-200 rounded-xl"><div class="flex-1"><p class="font-semibold text-green-900">✓ PDF: ${state.pdfFile.name}</p><p class="text-sm text-green-700">PyMuPDF highlighting</p></div><input type="color" value="${state.highlightColor}" oninput="state.highlightColor=this.value;render();" class="w-12 h-12 rounded cursor-pointer"><button onclick="highlightPDF()" class="bg-yellow-500 text-white px-6 py-3 rounded-lg hover:bg-yellow-600 font-semibold">🖍️ Highlight</button></div>`:''}</div>${results.length===0?`<p class="text-gray-500 text-center py-12">${state.searchPhrases.length===0&&Object.keys(state.tagStates).filter(t=>state.tagStates[t]!=='neutral').length===0?'Add search phrases or select tags':'No matches. Try different filters.'}</p>`:`<div class="space-y-6"><div class="flex justify-between items-center p-4 bg-indigo-50 rounded-xl"><div><p class="font-semibold text-indigo-900">${results.length} results</p><p class="text-sm text-indigo-700">${frequency.length} unique words</p><p class="text-xs text-indigo-600 mt-1">From ${state.corpora.filter(c=>c.selected).length} corpora</p></div><button onclick='exportToCSV(${JSON.stringify(results.map((r,i)=>({Number:i+1,...r})))}, "${tagType}_results")' class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-semibold">💾 Export CSV</button></div><div class="p-4 bg-blue-50 rounded-xl"><h3 class="font-bold text-blue-900 mb-3">📊 Word Frequency</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-64 overflow-y-auto">${frequency.slice(0,50).map(([word,count])=>`<div class="flex items-center justify-between p-2 bg-white rounded-lg"><span class="font-medium text-sm">${word}</span><span class="text-blue-600 font-bold text-sm">${count}</span></div>`).join('')}</div></div><div class="overflow-x-auto border-2 rounded-xl"><table class="w-full"><thead class="bg-indigo-100"><tr><th class="p-3 text-left font-bold">No.</th><th class="p-3 text-left font-bold">Corpus</th><th class="p-3 text-left font-bold">Left</th><th class="p-3 text-center font-bold">Node</th><th class="p-3 text-left font-bold">Right</th></tr></thead><tbody>${results.map((r,i)=>`<tr class="border-b hover:bg-indigo-50"><td class="p-3">${i+1}</td><td class="p-3 text-sm">${r.corpusName}</td><td class="p-3 text-sm text-right text-gray-600">${r.left}</td><td class="p-3 text-center"><span class="font-bold text-indigo-700 bg-indigo-100 px-3 py-1 rounded">${r.node}</span><div class="text-xs text-gray-500 mt-1">${tagType==='pos'?`${r.pos} / ${r.tag}`:tagType==='dep'?r.dep:r.semantic}</div></td><td class="p-3 text-sm text-gray-600">${r.right}</td></tr>`).join('')}</tbody></table></div></div>`}</div>`;}
+
+        function renderGraphsTab(results, frequency) {
+            const sc = state.corpora.filter(c => c.selected);
+
+if (sc.length === 0) {
+                return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                    <h2 class="text-2xl font-bold mb-6">📊 Graphs & Visualizations</h2>
+                    <div class="p-12 bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-200 rounded-2xl text-center">
+                        <div class="text-6xl mb-4">📂</div>
+                        <p class="text-yellow-800 font-bold text-xl">No Corpus Selected</p>
+                        <p class="text-sm text-yellow-700 mt-2">
+                            ${state.corpora.length === 0 ? 'Upload a corpus from the Input tab' : 'Select at least one corpus from the Input tab to visualize'}
+                        </p>
+                    </div>
+                </div>`;
+            }
+
+            if (results.length === 0) {
+                return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                    <h2 class="text-2xl font-bold mb-6">📊 Graphs & Visualizations</h2>
+                    <div class="p-12 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-2xl text-center">
+                        <div class="text-6xl mb-4">🔍</div>
+                        <p class="text-blue-800 font-bold text-xl">No Results to Visualize</p>
+                        <p class="text-sm text-blue-700 mt-2">
+                            Apply filters in POS, Dependencies, or Semantic tabs to generate beautiful graphs
+                        </p>
+                        <p class="text-xs text-blue-600 mt-4">
+                            💡 Try selecting tags or entering search phrases first
+                        </p>
+                    </div>
+                </div>`;
+            }
+
+            const graphTypeButtons = `
+                <div class="flex flex-wrap gap-3 mb-6">
+                    <button onclick="state.activeGraphType='frequency';render();" 
+                        class="px-6 py-3 rounded-xl font-bold transition-all shadow-lg ${state.activeGraphType === 'frequency' ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white transform scale-105' : 'bg-white text-gray-700 hover:bg-gray-100 border-2 border-gray-200'}">
+                        📊 Frequency Analysis
+                    </button>
+                    <button onclick="state.activeGraphType='collocation';render();" 
+                        class="px-6 py-3 rounded-xl font-bold transition-all shadow-lg ${state.activeGraphType === 'collocation' ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white transform scale-105' : 'bg-white text-gray-700 hover:bg-gray-100 border-2 border-gray-200'}">
+                        🔗 Collocation Network
+                    </button>
+                </div>
+            `;
+
+            if (state.activeGraphType === 'frequency') {
+                const graphOptions = [
+                    { id: 'bar', name: 'Bar Chart', icon: '📊', color: 'from-blue-500 to-cyan-500', desc: 'Classic vertical bars' },
+                    { id: 'pie', name: 'Pie Chart', icon: '🥧', color: 'from-pink-500 to-rose-500', desc: 'Circular segments' },
+                    { id: 'doughnut', name: 'Doughnut', icon: '🍩', color: 'from-purple-500 to-indigo-500', desc: 'Ring with percentages' },
+                    { id: 'line', name: 'Line Chart', icon: '📈', color: 'from-green-500 to-emerald-500', desc: 'Trend visualization' },
+                    { id: 'polar', name: 'Polar Area', icon: '🎯', color: 'from-orange-500 to-amber-500', desc: 'Radial comparison' }
+                ];
+
+                return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                    <h2 class="text-3xl font-bold mb-6 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">📊 Frequency Visualizations</h2>
+                    ${graphTypeButtons}
+                    
+                    <div class="mb-6 p-6 bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 rounded-2xl border-2 border-indigo-200">
+                        <h3 class="text-lg font-bold text-indigo-900 mb-4">🎨 Select Visualization Style</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                            ${graphOptions.map(opt => `
+                                <div onclick="state.selectedFreqGraph='${opt.id}';render();" 
+                                    class="graph-selector p-4 rounded-xl text-center cursor-pointer border-3 ${state.selectedFreqGraph === opt.id ? `bg-gradient-to-br ${opt.color} text-white shadow-2xl transform scale-105` : 'bg-white border-2 border-gray-200 hover:border-indigo-300'}">
+                                    <div class="text-4xl mb-2">${opt.icon}</div>
+                                    <div class="font-bold text-sm">${opt.name}</div>
+                                    <div class="text-xs mt-1 ${state.selectedFreqGraph === opt.id ? 'opacity-90' : 'text-gray-500'}">${opt.desc}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        
+                        <div class="flex flex-wrap gap-4 items-center justify-between bg-white rounded-xl p-4 border-2 border-indigo-200">
+                            <div class="flex items-center gap-3">
+                                <label class="font-bold text-gray-700">🎯 Display Limit:</label>
+                                <button onclick="state.showAllWords=false;render();" 
+                                    class="px-4 py-2 rounded-lg font-semibold transition-all ${!state.showAllWords ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                    Top ${state.topWordsLimit}
+                                </button>
+                                <button onclick="state.showAllWords=true;render();" 
+                                    class="px-4 py-2 rounded-lg font-semibold transition-all ${state.showAllWords ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                    All Words (${frequency.length})
+                                </button>
+                            </div>
+                            ${!state.showAllWords ? `
+                                <div class="flex items-center gap-3">
+                                    <label class="font-bold text-gray-700">Limit: ${state.topWordsLimit}</label>
+                                    <input type="range" min="5" max="50" step="5" value="${state.topWordsLimit}" 
+                                        oninput="state.topWordsLimit=parseInt(this.value);render();" 
+                                        class="w-32">
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+
+                    <div class="graph-card bg-gradient-to-br from-white to-gray-50 rounded-2xl p-6 border-2 border-purple-200 shadow-2xl mb-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 class="text-2xl font-bold text-gray-800">${graphOptions.find(o => o.id === state.selectedFreqGraph).name}</h3>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    Showing ${state.showAllWords ? frequency.length : Math.min(state.topWordsLimit, frequency.length)} words from ${results.length} total occurrences
+                                </p>
+                            </div>
+                            <button onclick="downloadCanvas('frequencyChart', 'frequency_${state.selectedFreqGraph}_chart.png')" 
+                                class="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-3 rounded-xl hover:from-green-700 hover:to-emerald-700 font-bold shadow-lg transform hover:scale-105 transition-all">
+                                💾 Download PNG
+                            </button>
+                        </div>
+                        <div style="height: 500px;" class="bg-white rounded-xl p-4">
+                            <canvas id="frequencyChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-2xl p-6 text-white shadow-xl">
+                            <div class="text-4xl mb-2">📝</div>
+                            <p class="text-3xl font-bold">${results.length}</p>
+                            <p class="text-sm opacity-90 mt-1">Total Occurrences</p>
+                        </div>
+                        <div class="bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl p-6 text-white shadow-xl">
+                            <div class="text-4xl mb-2">📚</div>
+                            <p class="text-3xl font-bold">${frequency.length}</p>
+                            <p class="text-sm opacity-90 mt-1">Unique Words</p>
+                        </div>
+                        <div class="bg-gradient-to-br from-green-500 to-emerald-500 rounded-2xl p-6 text-white shadow-xl">
+                            <div class="text-4xl mb-2">👑</div>
+                            <p class="text-2xl font-bold">${frequency[0] ? frequency[0][0] : 'N/A'}</p>
+                            <p class="text-sm opacity-90 mt-1">Most Frequent</p>
+                        </div>
+                        <div class="bg-gradient-to-br from-orange-500 to-red-500 rounded-2xl p-6 text-white shadow-xl">
+                            <div class="text-4xl mb-2">🔥</div>
+                            <p class="text-3xl font-bold">${frequency[0] ? frequency[0][1] : 0}</p>
+                            <p class="text-sm opacity-90 mt-1">Max Frequency</p>
+                        </div>
+                    </div>
+                </div>`;
+            } else {
+                // Enhanced Collocation Network
+                const allWords = results.map(r => r.node.toLowerCase());
+                const bigrams = {};
+                
+                for (let i = 0; i < allWords.length - 1; i++) {
+                    const bigram = `${allWords[i]}|${allWords[i + 1]}`;
+                    bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+                }
+                
+                const topBigrams = Object.entries(bigrams)
+                    .filter(([_, count]) => count > 1)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 40);
+                
+                if (topBigrams.length === 0) {
+                    return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                        <h2 class="text-3xl font-bold mb-6 bg-gradient-to-r from-pink-600 to-rose-600 bg-clip-text text-transparent">🔗 Collocation Network</h2>
+                        ${graphTypeButtons}
+                        <div class="p-12 bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-200 rounded-2xl text-center">
+                            <div class="text-6xl mb-4">🔍</div>
+                            <p class="text-yellow-800 font-bold text-xl">No Repeated Word Pairs Found</p>
+                            <p class="text-sm text-yellow-700 mt-2">
+                                Collocation networks require word pairs that occur multiple times in your corpus
+                            </p>
+                            <p class="text-xs text-yellow-600 mt-4">
+                                💡 Try analyzing a larger corpus or different search filters
+                            </p>
+                        </div>
+                    </div>`;
+                }
+                
+                // Create enhanced network visualization
+                const w = 1000, h = 800, cx = w / 2, cy = h / 2, r = 320;
+                const uniqueWords = [...new Set(topBigrams.flatMap(([b]) => b.split('|')))];
+                
+                // Calculate node frequencies for sizing
+                const nodeFreq = {};
+                topBigrams.forEach(([bigram]) => {
+                    const [w1, w2] = bigram.split('|');
+                    nodeFreq[w1] = (nodeFreq[w1] || 0) + 1;
+                    nodeFreq[w2] = (nodeFreq[w2] || 0) + 1;
+                });
+                
+                let svg = `<svg id="collocationNetwork" width="100%" height="${h}" viewBox="0 0 ${w} ${h}" class="border-2 border-purple-300 rounded-2xl" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">`;
+                
+                // Add decorative background circles
+                svg += `<circle cx="${cx}" cy="${cy}" r="380" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>`;
+                svg += `<circle cx="${cx}" cy="${cy}" r="340" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`;
+                svg += `<circle cx="${cx}" cy="${cy}" r="300" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+                
+                // Draw connections with gradient
+                const maxCount = Math.max(...topBigrams.map(([_, c]) => c));
+                topBigrams.forEach(([bigram, count], idx) => {
+                    const [w1, w2] = bigram.split('|');
+                    const i1 = uniqueWords.indexOf(w1);
+                    const i2 = uniqueWords.indexOf(w2);
+                    const a1 = (i1 / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+                    const a2 = (i2 / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+                    const x1 = cx + r * Math.cos(a1);
+                    const y1 = cy + r * Math.sin(a1);
+                    const x2 = cx + r * Math.cos(a2);
+                    const y2 = cy + r * Math.sin(a2);
+                    
+                    const strokeWidth = Math.min(2 + (count / maxCount) * 8, 12);
+                    const opacity = Math.min(0.3 + (count / maxCount) * 0.6, 0.9);
+                    
+                    // Color based on strength
+                    const color = count > maxCount * 0.7 ? '#FFD700' : 
+                                  count > maxCount * 0.4 ? '#FFA500' : '#FF69B4';
+                    
+                    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" 
+                        stroke="${color}" stroke-width="${strokeWidth}" opacity="${opacity}" 
+                        stroke-linecap="round"/>`;
+                });
+                
+                // Draw nodes with enhanced styling
+                uniqueWords.forEach((word, i) => {
+                    const a = (i / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+                    const x = cx + r * Math.cos(a);
+                    const y = cy + r * Math.sin(a);
+                    const displayWord = word.length > 10 ? word.substring(0, 9) + '..' : word;
+                    const wordFreqValue = frequency.find(([w]) => w === word)?.[1] || 0;
+                    const connections = nodeFreq[word] || 1;
+                    
+                    // Size based on connections
+                    const nodeSize = Math.min(25 + connections * 3, 55);
+                    
+                    // Color gradient for nodes
+                    const nodeColors = ['#FF6B9D', '#4FACFE', '#43E97B', '#FA709A', '#FEE140', 
+                                       '#30CFD0', '#A8EDEA', '#FFD89B', '#19547B', '#FFC371'];
+                    const nodeColor = nodeColors[i % nodeColors.length];
+                    
+                    // Outer glow
+                    svg += `<circle cx="${x}" cy="${y}" r="${nodeSize + 4}" 
+                        fill="${nodeColor}" opacity="0.3"/>`;
+                    
+                    // Main node
+                    svg += `<circle cx="${x}" cy="${y}" r="${nodeSize}" 
+                        fill="${nodeColor}" stroke="#ffffff" stroke-width="3" 
+                        filter="drop-shadow(0 4px 6px rgba(0,0,0,0.3))"/>`;
+                    
+                    // Word text
+                    svg += `<text x="${x}" y="${y + 5}" text-anchor="middle" 
+                        class="text-xs font-bold fill-white" 
+                        style="text-shadow: 1px 1px 2px rgba(0,0,0,0.5);">${displayWord}</text>`;
+                    
+                    // Frequency badge
+                    if (wordFreqValue > 0) {
+                        svg += `<circle cx="${x + nodeSize - 8}" cy="${y - nodeSize + 8}" r="12" 
+                            fill="#FF4444" stroke="#fff" stroke-width="2"/>`;
+                        svg += `<text x="${x + nodeSize - 8}" y="${y - nodeSize + 12}" 
+                            text-anchor="middle" class="text-xs font-bold fill-white">${wordFreqValue}</text>`;
+                    }
+                });
+                
+                // Add title
+                svg += `<text x="${cx}" y="40" text-anchor="middle" 
+                    class="text-2xl font-bold fill-white" 
+                    style="text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">Collocation Network Analysis</text>`;
+                
+                svg += '</svg>';
+                
+                return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                    <h2 class="text-3xl font-bold mb-6 bg-gradient-to-r from-pink-600 to-rose-600 bg-clip-text text-transparent">🔗 Collocation Network</h2>
+                    ${graphTypeButtons}
+                    
+                    <div class="space-y-6">
+                        <div class="graph-card bg-gradient-to-br from-white to-gray-50 rounded-2xl p-6 border-2 border-purple-200 shadow-2xl">
+                            <div class="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 class="text-2xl font-bold text-gray-800">Interactive Network Graph</h3>
+                                    <p class="text-sm text-gray-600 mt-2">
+                                        🔵 Node size = number of connections • 🔴 Badge = word frequency • 💛 Strong links • 🧡 Medium • 💖 Weak
+                                    </p>
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        Showing top ${topBigrams.length} collocations from ${uniqueWords.length} unique words
+                                    </p>
+                                </div>
+                                <button onclick="downloadSVG('collocationNetwork', 'collocation_network.svg')" 
+                                    class="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-3 rounded-xl hover:from-purple-700 hover:to-pink-700 font-bold shadow-lg transform hover:scale-105 transition-all">
+                                    💾 Download SVG
+                                </button>
+                            </div>
+                            <div class="flex justify-center bg-gray-50 rounded-xl p-4">
+                                ${svg}
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="bg-gradient-to-br from-blue-50 to-indigo-100 rounded-2xl p-6 border-2 border-blue-300 shadow-lg">
+                                <h3 class="text-xl font-bold text-blue-900 mb-4 flex items-center gap-2">
+                                    <span>🏆</span> Top 20 Strongest Collocations
+                                </h3>
+                                <div class="space-y-2 max-h-96 overflow-y-auto">
+                                    ${topBigrams.slice(0, 20).map(([bigram, count], idx) => {
+                                        const [w1, w2] = bigram.split('|');
+                                        const barWidth = (count / topBigrams[0][1]) * 100;
+                                        const colors = ['from-red-500 to-pink-500', 'from-orange-500 to-amber-500', 
+                                                       'from-yellow-500 to-lime-500', 'from-green-500 to-emerald-500',
+                                                       'from-cyan-500 to-blue-500'];
+                                        const colorClass = colors[Math.floor(idx / 4) % colors.length];
+                                        
+                                        return `<div class="bg-white rounded-xl p-3 shadow-md hover:shadow-xl transition-all">
+                                            <div class="flex items-center justify-between mb-2">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-lg font-bold text-gray-700">#${idx + 1}</span>
+                                                    <span class="text-sm font-semibold text-gray-600">${w1}</span>
+                                                    <span class="text-purple-600 font-bold">→</span>
+                                                    <span class="text-sm font-semibold text-gray-600">${w2}</span>
+                                                </div>
+                                                <span class="bg-gradient-to-r ${colorClass} text-white px-3 py-1 rounded-full font-bold text-sm shadow-md">
+                                                    ${count}×
+                                                </span>
+                                            </div>
+                                            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                                <div class="bg-gradient-to-r ${colorClass} h-full rounded-full transition-all duration-500" 
+                                                     style="width: ${barWidth}%"></div>
+                                            </div>
+                                        </div>`;
+                                    }).join('')}
+                                </div>
+                            </div>
+
+                            <div class="space-y-6">
+                                <div class="bg-gradient-to-br from-purple-50 to-pink-100 rounded-2xl p-6 border-2 border-purple-300 shadow-lg">
+                                    <h3 class="text-xl font-bold text-purple-900 mb-4 flex items-center gap-2">
+                                        <span>🌟</span> Most Connected Words
+                                    </h3>
+                                    <div class="space-y-2">
+
+
+${Object.entries(nodeFreq)
+                                            .sort((a, b) => b[1] - a[1])
+                                            .slice(0, 10)
+                                            .map(([word, connections], idx) => {
+                                                const wordFreqValue = frequency.find(([w]) => w === word)?.[1] || 0;
+                                                return `<div class="flex items-center justify-between bg-white rounded-lg p-3 shadow-md">
+                                                    <div class="flex items-center gap-3">
+                                                        <span class="bg-gradient-to-r from-purple-500 to-pink-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">
+                                                            ${idx + 1}
+                                                        </span>
+                                                        <span class="font-bold text-gray-700">${word}</span>
+                                                    </div>
+                                                    <div class="flex items-center gap-3">
+                                                        <span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-bold">
+                                                            ${connections} links
+                                                        </span>
+                                                        <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-bold">
+                                                            ${wordFreqValue}× freq
+                                                        </span>
+                                                    </div>
+                                                </div>`;
+                                            }).join('')}
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div class="bg-gradient-to-br from-green-500 to-emerald-500 rounded-2xl p-6 text-white shadow-xl">
+                                        <div class="text-4xl mb-2">🔗</div>
+                                        <p class="text-3xl font-bold">${topBigrams.length}</p>
+                                        <p class="text-sm opacity-90 mt-1">Total Collocations</p>
+                                    </div>
+                                    <div class="bg-gradient-to-br from-orange-500 to-red-500 rounded-2xl p-6 text-white shadow-xl">
+                                        <div class="text-4xl mb-2">🎯</div>
+                                        <p class="text-3xl font-bold">${uniqueWords.length}</p>
+                                        <p class="text-sm opacity-90 mt-1">Connected Words</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-gradient-to-r from-indigo-100 to-purple-100 rounded-2xl p-6 border-2 border-indigo-300">
+                            <h3 class="text-lg font-bold text-indigo-900 mb-3">📖 How to Read This Network</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                <div class="bg-white rounded-lg p-4">
+                                    <span class="font-bold text-purple-700">🔵 Node Size:</span>
+                                    <p class="text-gray-600 mt-1">Larger nodes have more connections to other words</p>
+                                </div>
+                                <div class="bg-white rounded-lg p-4">
+                                    <span class="font-bold text-purple-700">🔴 Red Badge:</span>
+                                    <p class="text-gray-600 mt-1">Shows how many times the word appears in results</p>
+                                </div>
+                                <div class="bg-white rounded-lg p-4">
+                                    <span class="font-bold text-purple-700">🌈 Line Colors:</span>
+                                    <p class="text-gray-600 mt-1">Gold = strongest, Orange = medium, Pink = weaker connections</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+        }
+
+        function renderCorpusBuilderTab() {
+            return `<div class="bg-white rounded-2xl shadow-xl p-6 animate-fade-in">
+                <h2 class="text-3xl font-bold mb-6 bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
+                    🏗️ Corpus Builder
+                </h2>
+                
+                <div class="mb-6 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl border-2 border-blue-200">
+                    <h3 class="text-lg font-bold text-blue-900 mb-2">📚 Build Custom Corpora</h3>
+                    <p class="text-sm text-blue-700">
+                        Create linguistic corpora by scraping social media accounts. Currently supports Twitter/X.
+                        More platforms coming soon!
+                    </p>
+                </div>
+
+                ${state.corpusBuilder.showInstructions ? `
+                    <div class="mb-6 p-6 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-2xl border-2 border-yellow-300">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-bold text-yellow-900">🔑 How to Get Twitter Cookies</h3>
+                            <button onclick="state.corpusBuilder.showInstructions=false;render();" 
+                                class="text-sm bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
+                                Close
+                            </button>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="bg-white rounded-xl p-4">
+                                <h4 class="font-bold text-green-700 mb-2">✅ Method 1: Browser Extension (EASIEST)</h4>
+                                <ol class="text-sm text-gray-700 space-y-1 ml-4 list-decimal">
+                                    <li>Install 'EditThisCookie' or 'Cookie-Editor' extension</li>
+                                    <li>Go to <strong>twitter.com</strong> (make sure you're logged in)</li>
+                                    <li>Click the extension icon</li>
+                                    <li>Find <strong>auth_token</strong> cookie → Copy its value</li>
+                                    <li>Find <strong>ct0</strong> cookie → Copy its value</li>
+                                    <li>Paste both values below</li>
+                                </ol>
+                            </div>
+                            
+                            <div class="bg-white rounded-xl p-4">
+                                <h4 class="font-bold text-blue-700 mb-2">⚙️ Method 2: Browser DevTools</h4>
+                                <ol class="text-sm text-gray-700 space-y-1 ml-4 list-decimal">
+                                    <li>Go to <strong>twitter.com</strong> (logged in)</li>
+                                    <li>Press <strong>F12</strong> to open DevTools</li>
+                                    <li>Go to <strong>Application</strong> tab (Chrome) or <strong>Storage</strong> tab (Firefox)</li>
+                                    <li>Click <strong>Cookies</strong> → <strong>https://twitter.com</strong></li>
+                                    <li>Find <strong>auth_token</strong> and <strong>ct0</strong> cookies</li>
+                                    <li>Copy their values and paste below</li>
+                                </ol>
+                            </div>
+                            
+                            <div class="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                                <p class="text-sm text-green-800">
+                                    <strong>🔒 Privacy:</strong> Your cookies are used only for this request and are NOT stored on our servers.
+                                </p>
+                                <p class="text-sm text-green-700 mt-2">
+                                    <strong>📢 Note:</strong> Only public tweets from public accounts can be scraped.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+
+                <div class="space-y-6">
+                    <div class="bg-gradient-to-br from-white to-gray-50 rounded-2xl p-6 border-2 border-purple-200 shadow-lg">
+                        <h3 class="text-xl font-bold text-purple-900 mb-4">🐦 Twitter/X Corpus</h3>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-bold text-gray-700 mb-2">
+                                    Twitter Username (without @)
+                                </label>
+                                <input type="text" 
+                                    value="${state.corpusBuilder.username}" 
+                                    oninput="state.corpusBuilder.username=this.value" 
+                                    placeholder="elonmusk" 
+                                    class="w-full p-3 border-2 border-gray-300 rounded-xl focus:border-purple-500"
+                                    ${state.corpusBuilder.building ? 'disabled' : ''}>
+                            </div>
+                            
+                            <div class="bg-blue-50 rounded-xl p-4 border-2 border-blue-200">
+                                <div class="flex items-center justify-between mb-3">
+                                    <h4 class="font-bold text-blue-900">🔑 Authentication Cookies</h4>
+                                    <button onclick="state.corpusBuilder.showInstructions=true;render();" 
+                                        class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">
+                                        Need Help?
+                                    </button>
+                                </div>
+                                
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-sm font-semibold text-blue-800 mb-1">
+                                            auth_token
+                                        </label>
+                                        <input type="password" 
+                                            value="${state.corpusBuilder.authToken}" 
+                                            oninput="state.corpusBuilder.authToken=this.value" 
+                                            placeholder="Paste your auth_token here" 
+                                            class="w-full p-2 border-2 border-blue-300 rounded-lg focus:border-blue-500 font-mono text-sm"
+                                            ${state.corpusBuilder.building ? 'disabled' : ''}>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-semibold text-blue-800 mb-1">
+                                            ct0
+                                        </label>
+                                        <input type="password" 
+                                            value="${state.corpusBuilder.ct0}" 
+                                            oninput="state.corpusBuilder.ct0=this.value" 
+                                            placeholder="Paste your ct0 here" 
+                                            class="w-full p-2 border-2 border-blue-300 rounded-lg focus:border-blue-500 font-mono text-sm"
+                                            ${state.corpusBuilder.building ? 'disabled' : ''}>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-bold text-gray-700 mb-2">
+                                    Max Tweets (optional)
+                                </label>
+                                <input type="number" 
+                                    value="${state.corpusBuilder.maxTweets || ''}" 
+                                    oninput="state.corpusBuilder.maxTweets=this.value?parseInt(this.value):null" 
+                                    placeholder="Leave empty for all tweets" 
+                                    class="w-full p-3 border-2 border-gray-300 rounded-xl focus:border-purple-500"
+                                    ${state.corpusBuilder.building ? 'disabled' : ''}>
+                                <p class="text-xs text-gray-500 mt-1">💡 Leave empty to fetch ALL tweets (may take time)</p>
+                            </div>
+                            
+                            <button onclick="buildTwitterCorpus()" 
+                                ${state.corpusBuilder.building || !state.corpusBuilder.username || !state.corpusBuilder.authToken || !state.corpusBuilder.ct0 ? 'disabled' : ''}
+                                class="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg transform hover:scale-105 transition-all">
+                                ${state.corpusBuilder.building ? '⏳ Building Corpus...' : '🚀 Build Corpus'}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    ${state.corpusBuilder.result ? `
+                        <div class="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-6 border-2 border-green-300 shadow-lg animate-fade-in">
+                            <h3 class="text-2xl font-bold text-green-900 mb-4">✅ Corpus Built Successfully!</h3>
+                            
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                <div class="bg-white rounded-xl p-4 text-center shadow">
+                                    <div class="text-3xl mb-1">📝</div>
+                                    <p class="text-2xl font-bold text-green-600">${state.corpusBuilder.result.stats.total_tweets.toLocaleString()}</p>
+                                    <p class="text-xs text-gray-600">Tweets</p>
+                                </div>
+                                <div class="bg-white rounded-xl p-4 text-center shadow">
+                                    <div class="text-3xl mb-1">📚</div>
+                                    <p class="text-2xl font-bold text-blue-600">${state.corpusBuilder.result.stats.total_words.toLocaleString()}</p>
+                                    <p class="text-xs text-gray-600">Words</p>
+                                </div>
+                                <div class="bg-white rounded-xl p-4 text-center shadow">
+                                    <div class="text-3xl mb-1">❤️</div>
+                                    <p class="text-2xl font-bold text-red-600">${state.corpusBuilder.result.stats.total_likes.toLocaleString()}</p>
+                                    <p class="text-xs text-gray-600">Likes</p>
+                                </div>
+                                <div class="bg-white rounded-xl p-4 text-center shadow">
+                                    <div class="text-3xl mb-1">🔄</div>
+                                    <p class="text-2xl font-bold text-purple-600">${state.corpusBuilder.result.stats.total_retweets.toLocaleString()}</p>
+                                    <p class="text-xs text-gray-600">Retweets</p>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-white rounded-xl p-4 mb-4">
+                                <h4 class="font-bold text-gray-800 mb-2">📊 Corpus Information</h4>
+                                <div class="text-sm text-gray-700 space-y-1">
+                                    <p><strong>Date Range:</strong> ${state.corpusBuilder.result.stats.date_range.start} to ${state.corpusBuilder.result.stats.date_range.end}</p>
+                                    <p><strong>Time Span:</strong> ${state.corpusBuilder.result.stats.time_span_years} years (${state.corpusBuilder.result.stats.time_span_days.toLocaleString()} days)</p>
+                                    <p><strong>Avg Tweet Length:</strong> ${state.corpusBuilder.result.stats.avg_tweet_length} characters</p>
+                                    <p><strong>Total Characters:</strong> ${state.corpusBuilder.result.stats.total_characters.toLocaleString()}</p>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-white rounded-xl p-4 mb-4">
+                                <h4 class="font-bold text-gray-800 mb-2">👁️ Preview (First 500 chars)</h4>
+                                <pre class="text-xs bg-gray-50 p-3 rounded-lg overflow-x-auto border">${state.corpusBuilder.result.preview}</pre>
+                            </div>
+                            
+                            <h4 class="font-bold text-gray-800 mb-3">💾 Download Corpus</h4>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <button onclick="downloadCorpus('txt')" 
+                                    class="bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 shadow-lg transform hover:scale-105 transition-all">
+                                    📄 TXT
+                                </button>
+                                <button onclick="downloadCorpus('csv')" 
+                                    class="bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transform hover:scale-105 transition-all">
+                                    📊 CSV
+                                </button>
+                                <button onclick="downloadCorpus('json')" 
+                                    class="bg-purple-600 text-white py-3 rounded-xl font-bold hover:bg-purple-700 shadow-lg transform hover:scale-105 transition-all">
+                                    🔧 JSON
+                                </button>
+                                <button onclick="downloadCorpus('docx')" 
+                                    class="bg-gradient-to-r from-orange-600 to-red-600 text-white py-3 rounded-xl font-bold hover:from-orange-700 hover:to-red-700 shadow-lg transform hover:scale-105 transition-all">
+                                    📝 DOCX
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>`;
+        }
+
+        checkBackendHealth();
+        setInterval(checkBackendHealth, 10000);
+        render();
+    </script>
+</body>
+</html>
